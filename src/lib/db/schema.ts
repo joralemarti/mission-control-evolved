@@ -162,6 +162,41 @@ CREATE TABLE IF NOT EXISTS task_deliverables (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Task attempts table (auto-orchestration)
+CREATE TABLE IF NOT EXISTS task_attempts (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  attempt_number INTEGER NOT NULL,
+  agent_id TEXT NOT NULL,
+  auto_retry INTEGER NOT NULL DEFAULT 0,
+  selection_score REAL,
+  dispatched_at TEXT NOT NULL,
+  completed_at TEXT,
+  outcome TEXT,
+  error TEXT,
+  UNIQUE (task_id, attempt_number)
+);
+
+-- Task outcomes table (final results)
+CREATE TABLE IF NOT EXISTS task_outcomes (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  final_status TEXT NOT NULL,
+  attempts INTEGER NOT NULL,
+  last_agent_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (task_id)
+);
+
+-- Agent stats table (performance tracking)
+CREATE TABLE IF NOT EXISTS agent_stats (
+  agent_id TEXT PRIMARY KEY,
+  total_success INTEGER NOT NULL DEFAULT 0,
+  total_failure INTEGER NOT NULL DEFAULT 0,
+  is_degraded INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_agent_id);
@@ -174,4 +209,7 @@ CREATE INDEX IF NOT EXISTS idx_activities_task ON task_activities(task_id, creat
 CREATE INDEX IF NOT EXISTS idx_deliverables_task ON task_deliverables(task_id);
 CREATE INDEX IF NOT EXISTS idx_openclaw_sessions_task ON openclaw_sessions(task_id);
 CREATE INDEX IF NOT EXISTS idx_planning_questions_task ON planning_questions(task_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_task_attempts_task ON task_attempts(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_attempts_agent ON task_attempts(agent_id);
+CREATE INDEX IF NOT EXISTS idx_task_outcomes_task ON task_outcomes(task_id);
 `;

@@ -151,6 +151,65 @@ const migrations: Migration[] = [
         console.log('[Migration 004] Added planning_agents');
       }
     }
+  },
+  {
+    id: '005',
+    name: 'add_orchestration_evolution_tables',
+    up: (db) => {
+      console.log('[Migration 005] Adding orchestration evolution tables...');
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_attempts (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL,
+          attempt_number INTEGER NOT NULL,
+          agent_id TEXT NOT NULL,
+          auto_retry INTEGER NOT NULL DEFAULT 0,
+          selection_score REAL,
+          dispatched_at TEXT NOT NULL,
+          completed_at TEXT,
+          outcome TEXT,
+          error TEXT
+        );
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_outcomes (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL,
+          final_status TEXT NOT NULL,
+          attempts INTEGER NOT NULL,
+          last_agent_id TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_stats (
+          agent_id TEXT PRIMARY KEY,
+          total_success INTEGER NOT NULL DEFAULT 0,
+          total_failure INTEGER NOT NULL DEFAULT 0,
+          last_20_success INTEGER NOT NULL DEFAULT 0,
+          last_20_failure INTEGER NOT NULL DEFAULT 0,
+          is_degraded INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL
+        );
+      `);
+
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_task_attempts_task ON task_attempts(task_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_task_attempts_agent ON task_attempts(agent_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_task_outcomes_task ON task_outcomes(task_id)`);
+    }
+  },
+  {
+    id: '006',
+    name: 'hardening_orchestration_evolution',
+    up: (db) => {
+      console.log('[Migration 006] Hardening orchestration evolution tables...');
+
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_attempts_unique ON task_attempts(task_id, attempt_number)`);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_outcomes_unique ON task_outcomes(task_id)`);
+    }
   }
 ];
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
-import { queryOne, run } from '@/lib/db';
+import { queryOne, queryAll, run } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import { broadcast } from '@/lib/events';
 import { getProjectsPath, getMissionControlUrl } from '@/lib/config';
@@ -50,6 +50,86 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: 'Assigned agent not found' }, { status: 404 });
     }
 
+    type AgentStatsRow = {
+      total_success: number;
+      total_failure: number;
+      is_degraded: number;
+    };
+
+    const getSelectionScore = (agentId: string): number => {
+      const stats = queryOne<AgentStatsRow>(
+        'SELECT total_success, total_failure, is_degraded FROM agent_stats WHERE agent_id = ?',
+        [agentId]
+      );
+      const totalAttempts = (stats?.total_success || 0) + (stats?.total_failure || 0);
+      const successRate = totalAttempts > 0 ? (stats?.total_success || 0) / totalAttempts : 0;
+      const degradationPenalty = stats?.is_degraded ? 0.2 : 0;
+      return successRate - degradationPenalty;
+    };
+
+    // Determine attempt number (max 2 attempts)
+    const attemptsSoFar = queryOne<{ count: number }>(
+      'SELECT COUNT(*) as count FROM task_attempts WHERE task_id = ?',
+      [id]
+    )?.count || 0;
+    const attemptNumber = attemptsSoFar + 1;
+
+    if (attemptNumber > 2) {
+      return NextResponse.json(
+        { error: 'Max dispatch attempts reached for this task' },
+        { status: 409 }
+      );
+    }
+
+    const previousAgents = queryAll<{ agent_id: string }>(
+      'SELECT DISTINCT agent_id FROM task_attempts WHERE task_id = ?',
+      [id]
+    ).map(row => row.agent_id);
+
+    let selectedAgent = agent;
+    let selectionScore = getSelectionScore(agent.id);
+
+    if (attemptNumber > 1) {
+      const availableAgents = queryAll<Agent>(
+        'SELECT * FROM agents WHERE status != ?',
+        ['offline']
+      );
+      const alternativeAgents = availableAgents.filter(a => !previousAgents.includes(a.id));
+      const candidatePool = alternativeAgents.length > 0 ? alternativeAgents : availableAgents;
+
+      if (candidatePool.length > 0) {
+        const scored = candidatePool.map(candidate => ({
+          agent: candidate,
+          score: getSelectionScore(candidate.id)
+        })).sort((a, b) => b.score - a.score);
+
+        selectedAgent = scored[0].agent;
+        selectionScore = scored[0].score;
+      }
+    }
+
+    // Update assignment if a different agent is selected for retry
+    if (selectedAgent.id !== agent.id) {
+      run(
+        'UPDATE tasks SET assigned_agent_id = ?, updated_at = ? WHERE id = ?',
+        [selectedAgent.id, new Date().toISOString(), id]
+      );
+
+      run(
+        `INSERT INTO events (id, type, agent_id, task_id, message, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+        ,
+        [
+          uuidv4(),
+          'task_assigned',
+          selectedAgent.id,
+          task.id,
+          `Task "${task.title}" reassigned to ${selectedAgent.name} for retry`,
+          new Date().toISOString()
+        ]
+      );
+    }
+
     // Connect to OpenClaw Gateway
     const client = getOpenClawClient();
     if (!client.isConnected()) {
@@ -67,7 +147,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // Get or create OpenClaw session for this agent
     let session = queryOne<OpenClawSession>(
       'SELECT * FROM openclaw_sessions WHERE agent_id = ? AND status = ?',
-      [agent.id, 'active']
+      [selectedAgent.id, 'active']
     );
 
     const now = new Date().toISOString();
@@ -75,12 +155,12 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     if (!session) {
       // Create session record
       const sessionId = uuidv4();
-      const openclawSessionId = `mission-control-${agent.name.toLowerCase().replace(/\s+/g, '-')}`;
+      const openclawSessionId = `mission-control-${selectedAgent.name.toLowerCase().replace(/\s+/g, '-')}`;
       
       run(
         `INSERT INTO openclaw_sessions (id, agent_id, openclaw_session_id, channel, status, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [sessionId, agent.id, openclawSessionId, 'mission-control', 'active', now, now]
+        [sessionId, selectedAgent.id, openclawSessionId, 'mission-control', 'active', now, now]
       );
 
       session = queryOne<OpenClawSession>(
@@ -92,7 +172,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       run(
         `INSERT INTO events (id, type, agent_id, message, created_at)
          VALUES (?, ?, ?, ?, ?)`,
-        [uuidv4(), 'agent_status_changed', agent.id, `${agent.name} session created`, now]
+        [uuidv4(), 'agent_status_changed', selectedAgent.id, `${selectedAgent.name} session created`, now]
       );
     }
 
@@ -141,6 +221,28 @@ When complete, reply with:
 
 If you need help or clarification, ask me (Charlie).`;
 
+    // Record dispatch attempt before sending
+    const attemptInsert = run(
+      `INSERT OR IGNORE INTO task_attempts (id, task_id, attempt_number, agent_id, auto_retry, selection_score, dispatched_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        uuidv4(),
+        task.id,
+        attemptNumber,
+        selectedAgent.id,
+        attemptNumber > 1 ? 1 : 0,
+        selectionScore,
+        now
+      ]
+    );
+
+    if (attemptInsert.changes === 0) {
+      return NextResponse.json(
+        { error: 'Dispatch attempt already recorded' },
+        { status: 409 }
+      );
+    }
+
     // Send message to agent's session using chat.send
     try {
       // Use sessionKey for routing to the agent's session
@@ -170,7 +272,7 @@ If you need help or clarification, ask me (Charlie).`;
       // Update agent status to working
       run(
         'UPDATE agents SET status = ?, updated_at = ? WHERE id = ?',
-        ['working', now, agent.id]
+        ['working', now, selectedAgent.id]
       );
 
       // Log dispatch event
@@ -180,9 +282,9 @@ If you need help or clarification, ask me (Charlie).`;
         [
           uuidv4(),
           'task_dispatched',
-          agent.id,
+          selectedAgent.id,
           task.id,
-          `Task "${task.title}" dispatched to ${agent.name}`,
+          `Task "${task.title}" dispatched to ${selectedAgent.name}`,
           now
         ]
       );
@@ -190,7 +292,7 @@ If you need help or clarification, ask me (Charlie).`;
       return NextResponse.json({
         success: true,
         task_id: task.id,
-        agent_id: agent.id,
+        agent_id: selectedAgent.id,
         session_id: session.openclaw_session_id,
         message: 'Task dispatched to agent'
       });
