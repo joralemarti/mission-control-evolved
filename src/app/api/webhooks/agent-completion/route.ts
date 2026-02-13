@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
-import { queryOne, queryAll, run } from '@/lib/db';
-import type { Task, Agent, OpenClawSession } from '@/lib/types';
+import { queryOne, queryAll, run, transaction } from '@/lib/db';
+import { getMissionControlUrl } from '@/lib/config';
+import type { Task, OpenClawSession } from '@/lib/types';
 
 /**
  * POST /api/webhooks/agent-completion
@@ -24,9 +25,16 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const now = new Date().toISOString();
 
+    let task: Task & { assigned_agent_name?: string } | undefined;
+    let agentId: string | undefined;
+    let summary = body.summary || 'Task finished';
+    const rawOutcome = body.outcome ? String(body.outcome).toLowerCase() : undefined;
+    const normalizedOutcome = rawOutcome && rawOutcome !== 'success' ? 'failed' : 'success';
+    const error = body.error ? String(body.error) : null;
+
     // Handle direct task_id completion
     if (body.task_id) {
-      const task = queryOne<Task & { assigned_agent_name?: string }>(
+      task = queryOne<Task & { assigned_agent_name?: string }>(
         `SELECT t.*, a.name as assigned_agent_name
          FROM tasks t
          LEFT JOIN agents a ON t.assigned_agent_id = a.id
@@ -38,47 +46,14 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Task not found' }, { status: 404 });
       }
 
-      // Only move to testing if not already in testing, review, or done
-      // (Don't overwrite user's approval or testing results)
-      if (task.status !== 'testing' && task.status !== 'review' && task.status !== 'done') {
-        run(
-          'UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?',
-          ['testing', now, task.id]
-        );
+      agentId = task.assigned_agent_id;
+      if (!agentId) {
+        return NextResponse.json({ error: 'Task has no assigned agent' }, { status: 400 });
       }
-
-      // Log completion
-      run(
-        `INSERT INTO events (id, type, agent_id, task_id, message, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          uuidv4(),
-          'task_completed',
-          task.assigned_agent_id,
-          task.id,
-          `${task.assigned_agent_name} completed: ${body.summary || 'Task finished'}`,
-          now
-        ]
-      );
-
-      // Set agent back to standby
-      if (task.assigned_agent_id) {
-        run(
-          'UPDATE agents SET status = ?, updated_at = ? WHERE id = ?',
-          ['standby', now, task.assigned_agent_id]
-        );
-      }
-
-      return NextResponse.json({
-        success: true,
-        task_id: task.id,
-        new_status: 'testing',
-        message: 'Task moved to testing for automated verification'
-      });
     }
 
     // Handle session-based completion (from message parsing)
-    if (body.session_id && body.message) {
+    if (!task && body.session_id && body.message) {
       // Parse TASK_COMPLETE message
       const completionMatch = body.message.match(/TASK_COMPLETE:\s*(.+)/i);
       if (!completionMatch) {
@@ -88,7 +63,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const summary = completionMatch[1].trim();
+      summary = completionMatch[1].trim();
 
       // Find agent by session
       const session = queryOne<OpenClawSession>(
@@ -103,8 +78,10 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      agentId = session.agent_id;
+
       // Find active task for this agent
-      const task = queryOne<Task & { assigned_agent_name?: string }>(
+      task = queryOne<Task & { assigned_agent_name?: string }>(
         `SELECT t.*, a.name as assigned_agent_name
          FROM tasks t
          LEFT JOIN agents a ON t.assigned_agent_id = a.id
@@ -121,50 +98,216 @@ export async function POST(request: NextRequest) {
           { status: 404 }
         );
       }
+    }
 
-      // Only move to testing if not already in testing, review, or done
-      // (Don't overwrite user's approval or testing results)
-      if (task.status !== 'testing' && task.status !== 'review' && task.status !== 'done') {
+    if (!task || !agentId) {
+      return NextResponse.json(
+        { error: 'Invalid payload. Provide either task_id or session_id + message' },
+        { status: 400 }
+      );
+    }
+
+    let shouldRetry = false;
+    let finalStatus: string | null = null;
+    let alreadyCompleted = false;
+
+    const pendingAttempt = queryOne<{ id: string; attempt_number: number }>(
+      `SELECT id, attempt_number
+       FROM task_attempts
+       WHERE task_id = ? AND agent_id = ? AND completed_at IS NULL
+       ORDER BY attempt_number DESC
+       LIMIT 1`,
+      [task!.id, agentId]
+    );
+
+    if (!pendingAttempt) {
+      const completedAttempt = queryOne<{ id: string; outcome: string | null }>(
+        `SELECT id, outcome
+         FROM task_attempts
+         WHERE task_id = ? AND agent_id = ? AND completed_at IS NOT NULL
+         ORDER BY completed_at DESC
+         LIMIT 1`,
+        [task!.id, agentId]
+      );
+
+      if (completedAttempt) {
+        return NextResponse.json({
+          success: true,
+          task_id: task.id,
+          agent_id: agentId,
+          outcome: completedAttempt.outcome,
+          idempotent: true
+        });
+      }
+    }
+
+    transaction(() => {
+      // Update attempt record
+      let attempt = pendingAttempt;
+
+      if (!attempt) {
+        const existingAttempts = queryOne<{ count: number }>(
+          'SELECT COUNT(*) as count FROM task_attempts WHERE task_id = ?',
+          [task!.id]
+        )?.count || 0;
+        const fallbackAttemptNumber = existingAttempts + 1;
+        const fallbackId = uuidv4();
+
         run(
-          'UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?',
-          ['testing', now, task.id]
+          `INSERT OR IGNORE INTO task_attempts (id, task_id, attempt_number, agent_id, auto_retry, selection_score, dispatched_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            fallbackId,
+            task!.id,
+            fallbackAttemptNumber,
+            agentId,
+            fallbackAttemptNumber > 1 ? 1 : 0,
+            null,
+            now
+          ]
         );
+
+        attempt = { id: fallbackId, attempt_number: fallbackAttemptNumber };
       }
 
-      // Log completion with summary
-      run(
-        `INSERT INTO events (id, type, agent_id, task_id, message, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          uuidv4(),
-          'task_completed',
-          session.agent_id,
-          task.id,
-          `${task.assigned_agent_name} completed: ${summary}`,
-          now
-        ]
+      const updateAttempt = run(
+        `UPDATE task_attempts
+         SET completed_at = ?, outcome = ?, error = ?
+         WHERE id = ? AND completed_at IS NULL`,
+        [now, normalizedOutcome, error, attempt.id]
       );
+
+      if (updateAttempt.changes === 0) {
+        alreadyCompleted = true;
+        return;
+      }
+
+      // Update agent stats
+      run(
+        `INSERT OR IGNORE INTO agent_stats (
+          agent_id, total_success, total_failure, is_degraded, updated_at
+        ) VALUES (?, 0, 0, 0, ?)`,
+        [agentId, now]
+      );
+
+      const stats = queryOne<{
+        total_success: number;
+        total_failure: number;
+        is_degraded: number;
+      }>(
+        'SELECT total_success, total_failure, is_degraded FROM agent_stats WHERE agent_id = ?',
+        [agentId]
+      );
+
+      let totalSuccess = stats?.total_success || 0;
+      let totalFailure = stats?.total_failure || 0;
+
+      if (normalizedOutcome === 'success') {
+        totalSuccess += 1;
+      } else {
+        totalFailure += 1;
+      }
+
+      const recentOutcomes = queryAll<{ outcome: string | null }>(
+        `SELECT outcome
+         FROM task_attempts
+         WHERE agent_id = ? AND completed_at IS NOT NULL
+         ORDER BY completed_at DESC
+         LIMIT 20`,
+        [agentId]
+      );
+
+      const recentSuccesses = recentOutcomes.filter(row => row.outcome === 'success').length;
+      const last20Total = recentOutcomes.length;
+      const last20SuccessRate = last20Total > 0 ? recentSuccesses / last20Total : 0;
+
+      const totalAttempts = totalSuccess + totalFailure;
+
+      let isDegraded = stats?.is_degraded || 0;
+      if (totalAttempts >= 10 && last20SuccessRate < 0.6) {
+        isDegraded = 1;
+      } else if (last20SuccessRate > 0.7) {
+        isDegraded = 0;
+      }
+
+      run(
+        `UPDATE agent_stats
+         SET total_success = ?, total_failure = ?, is_degraded = ?, updated_at = ?
+         WHERE agent_id = ?`,
+        [totalSuccess, totalFailure, isDegraded, now, agentId]
+      );
+
+      const attemptCount = queryOne<{ count: number }>(
+        'SELECT COUNT(*) as count FROM task_attempts WHERE task_id = ?',
+        [task!.id]
+      )?.count || 0;
+
+      if (normalizedOutcome === 'failed' && attemptCount < 2) {
+        shouldRetry = true;
+      } else {
+        finalStatus = normalizedOutcome === 'success' ? 'testing' : 'review';
+
+        run(
+          `INSERT OR IGNORE INTO task_outcomes (id, task_id, final_status, attempts, last_agent_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [uuidv4(), task!.id, normalizedOutcome, attemptCount, agentId, now]
+        );
+
+        if (finalStatus && task!.status !== 'review' && task!.status !== 'done') {
+          run(
+            'UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?',
+            [finalStatus, now, task!.id]
+          );
+        }
+
+        const eventType = normalizedOutcome === 'success' ? 'task_completed' : 'task_status_changed';
+        const eventMessage = normalizedOutcome === 'success'
+          ? `${task!.assigned_agent_name || 'Agent'} completed: ${summary}`
+          : `${task!.assigned_agent_name || 'Agent'} failed after ${attemptCount} attempts`;
+
+        run(
+          `INSERT INTO events (id, type, agent_id, task_id, message, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [uuidv4(), eventType, agentId, task!.id, eventMessage, now]
+        );
+      }
 
       // Set agent back to standby
       run(
         'UPDATE agents SET status = ?, updated_at = ? WHERE id = ?',
-        ['standby', now, session.agent_id]
+        ['standby', now, agentId]
       );
+    });
 
+    if (alreadyCompleted) {
       return NextResponse.json({
         success: true,
         task_id: task.id,
-        agent_id: session.agent_id,
-        summary,
-        new_status: 'testing',
-        message: 'Task moved to testing for automated verification'
+        agent_id: agentId,
+        outcome: normalizedOutcome,
+        idempotent: true
       });
     }
 
-    return NextResponse.json(
-      { error: 'Invalid payload. Provide either task_id or session_id + message' },
-      { status: 400 }
-    );
+    if (shouldRetry) {
+      const missionControlUrl = getMissionControlUrl();
+      fetch(`${missionControlUrl}/api/tasks/${task.id}/dispatch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      }).catch(err => {
+        console.error('Auto-dispatch retry failed:', err);
+      });
+    }
+
+    return NextResponse.json({
+      success: true,
+      task_id: task.id,
+      agent_id: agentId,
+      summary,
+      outcome: normalizedOutcome,
+      should_retry: shouldRetry,
+      new_status: finalStatus
+    });
   } catch (error) {
     console.error('Agent completion webhook error:', error);
     return NextResponse.json(
