@@ -3,8 +3,8 @@ import { getDb } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 // File system imports removed - using OpenClaw API instead
 
-// Planning session prefix for OpenClaw (must match agent:main: format)
-const PLANNING_SESSION_PREFIX = 'agent:main:planning:';
+// Planning session prefix for OpenClaw (runtime-aware)
+const PLANNING_SESSION_PREFIX = 'agent:';
 
 // Helper to extract JSON from a response that might have markdown code blocks or surrounding text
 function extractJSON(text: string): object | null {
@@ -90,6 +90,7 @@ export async function GET(
       title: string;
       description: string;
       status: string;
+      assigned_agent_id?: string;
       planning_session_key?: string;
       planning_messages?: string;
       planning_complete?: number;
@@ -162,6 +163,7 @@ export async function POST(
       title: string;
       description: string;
       status: string;
+      assigned_agent_id?: string;
       planning_session_key?: string;
       planning_messages?: string;
     } | undefined;
@@ -175,8 +177,16 @@ export async function POST(
       return NextResponse.json({ error: 'Planning already started', sessionKey: task.planning_session_key }, { status: 400 });
     }
 
+    let runtimeAgent = 'main';
+    if (task.assigned_agent_id) {
+      const agent = getDb().prepare('SELECT openclaw_agent_name FROM agents WHERE id = ?').get(task.assigned_agent_id) as { openclaw_agent_name?: string } | undefined;
+      if (agent?.openclaw_agent_name) {
+        runtimeAgent = agent.openclaw_agent_name;
+      }
+    }
+
     // Create session key for this planning task
-    const sessionKey = `${PLANNING_SESSION_PREFIX}${taskId}`;
+    const sessionKey = `${PLANNING_SESSION_PREFIX}${runtimeAgent}:planning:${taskId}`;
 
     // Build the initial planning prompt
     const planningPrompt = `PLANNING REQUEST

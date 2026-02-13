@@ -3,6 +3,19 @@ import { v4 as uuidv4 } from 'uuid';
 import { queryOne, run } from '@/lib/db';
 import type { Agent, UpdateAgentRequest } from '@/lib/types';
 
+function validateOpenClawAgentName(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    return 'openclaw_agent_name must be a string';
+  }
+  if (value.includes(':') || /\s/.test(value)) {
+    return 'openclaw_agent_name must not contain colon or whitespace';
+  }
+  return null;
+}
+
 // GET /api/agents/[id] - Get a single agent
 export async function GET(
   request: NextRequest,
@@ -39,6 +52,11 @@ export async function PATCH(
 
     const updates: string[] = [];
     const values: unknown[] = [];
+
+    const openclawAgentNameError = validateOpenClawAgentName(body.openclaw_agent_name);
+    if (openclawAgentNameError) {
+      return NextResponse.json({ error: openclawAgentNameError }, { status: 400 });
+    }
 
     if (body.name !== undefined) {
       updates.push('name = ?');
@@ -83,6 +101,10 @@ export async function PATCH(
     if (body.agents_md !== undefined) {
       updates.push('agents_md = ?');
       values.push(body.agents_md);
+    }
+    if (body.openclaw_agent_name !== undefined) {
+      updates.push('openclaw_agent_name = ?');
+      values.push(body.openclaw_agent_name || 'main');
     }
 
     if (updates.length === 0) {

@@ -3,6 +3,19 @@ import { v4 as uuidv4 } from 'uuid';
 import { queryAll, queryOne, run } from '@/lib/db';
 import type { Agent, CreateAgentRequest } from '@/lib/types';
 
+function validateOpenClawAgentName(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    return 'openclaw_agent_name must be a string';
+  }
+  if (value.includes(':') || /\s/.test(value)) {
+    return 'openclaw_agent_name must not contain colon or whitespace';
+  }
+  return null;
+}
+
 // GET /api/agents - List all agents
 export async function GET(request: NextRequest) {
   try {
@@ -34,12 +47,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Name and role are required' }, { status: 400 });
     }
 
+    const openclawAgentNameError = validateOpenClawAgentName(body.openclaw_agent_name);
+    if (openclawAgentNameError) {
+      return NextResponse.json({ error: openclawAgentNameError }, { status: 400 });
+    }
+
     const id = uuidv4();
     const now = new Date().toISOString();
 
     run(
-      `INSERT INTO agents (id, name, role, description, avatar_emoji, is_master, workspace_id, soul_md, user_md, agents_md, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO agents (id, name, role, description, avatar_emoji, is_master, workspace_id, soul_md, user_md, agents_md, openclaw_agent_name, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         body.name,
@@ -51,6 +69,7 @@ export async function POST(request: NextRequest) {
         body.soul_md || null,
         body.user_md || null,
         body.agents_md || null,
+        body.openclaw_agent_name || 'main',
         now,
         now,
       ]
