@@ -262,17 +262,9 @@ If you need help or clarification, ask me (Charlie).`;
       // Format: agent:{openclaw_agent_name}:{openclaw_session_id}
       const sessionKey = `agent:${runtimeAgent}:${session.openclaw_session_id}`;
       
-      // Pass agent configuration files (SOUL.md, USER.md, AGENTS.md) as contextFiles
-      const contextFiles = [
-        { path: 'SOUL.md', content: selectedAgent.soul_md || '' },
-        { path: 'USER.md', content: selectedAgent.user_md || '' },
-        { path: 'AGENTS.md', content: selectedAgent.agents_md || '' },
-      ].filter(f => f.content);
-      
       await client.call('chat.send', {
         sessionKey,
         message: taskMessage,
-        contextFiles,
         idempotencyKey: `dispatch-${task.id}-${Date.now()}`
       });
 
