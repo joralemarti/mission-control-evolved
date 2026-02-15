@@ -210,6 +210,33 @@ const migrations: Migration[] = [
       db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_attempts_unique ON task_attempts(task_id, attempt_number)`);
       db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_outcomes_unique ON task_outcomes(task_id)`);
     }
+  },
+  {
+    id: '007',
+    name: 'add_openclaw_agent_name_to_agents',
+    up: (db) => {
+      console.log('[Migration 007] Adding openclaw_agent_name to agents...');
+
+      const agentsInfo = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
+      if (!agentsInfo.some(col => col.name === 'openclaw_agent_name')) {
+        db.exec(`ALTER TABLE agents ADD COLUMN openclaw_agent_name TEXT DEFAULT 'main'`);
+        console.log('[Migration 007] Added openclaw_agent_name');
+      }
+    }
+  },
+  {
+    id: '008',
+    name: 'normalize_openclaw_agent_name_to_id',
+    up: (db) => {
+      console.log('[Migration 008] Normalizing openclaw_agent_name values to runtime ids...');
+
+      // Safe normalization fallback for common identity names -> main
+      db.exec(`
+        UPDATE agents
+        SET openclaw_agent_name = 'main'
+        WHERE openclaw_agent_name IN ('Bender', 'Charlie', 'Forge');
+      `);
+    }
   }
 ];
 

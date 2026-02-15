@@ -1,7 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { queryAll, queryOne, run } from '@/lib/db';
+import { getOpenClawClient } from '@/lib/openclaw/client';
 import type { Agent, CreateAgentRequest } from '@/lib/types';
+
+function validateOpenClawAgentName(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    return 'openclaw_agent_name must be a string';
+  }
+  if (value.includes(':') || /\s/.test(value)) {
+    return 'openclaw_agent_name must not contain colon or whitespace';
+  }
+  return null;
+}
+
+async function fetchRuntimeAgentIds(): Promise<string[]> {
+  const client = getOpenClawClient();
+  if (!client.isConnected()) {
+    await client.connect();
+  }
+  const runtime = await client.call('agents.list', {});
+  return (runtime as { agents?: Array<{ id: string }> })?.agents?.map((a) => a.id) ?? [];
+}
 
 // GET /api/agents - List all agents
 export async function GET(request: NextRequest) {
@@ -34,12 +57,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Name and role are required' }, { status: 400 });
     }
 
+    const openclawAgentNameError = validateOpenClawAgentName(body.openclaw_agent_name);
+    if (openclawAgentNameError) {
+      return NextResponse.json({ error: openclawAgentNameError }, { status: 400 });
+    }
+
+    if (body.openclaw_agent_name) {
+      const validIds = await fetchRuntimeAgentIds();
+      if (!validIds.includes(body.openclaw_agent_name)) {
+        return NextResponse.json(
+          { error: 'Invalid OpenClaw runtime agent' },
+          { status: 400 }
+        );
+      }
+    }
+
     const id = uuidv4();
     const now = new Date().toISOString();
 
     run(
-      `INSERT INTO agents (id, name, role, description, avatar_emoji, is_master, workspace_id, soul_md, user_md, agents_md, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO agents (id, name, role, description, avatar_emoji, is_master, workspace_id, soul_md, user_md, agents_md, openclaw_agent_name, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         body.name,
@@ -51,6 +89,7 @@ export async function POST(request: NextRequest) {
         body.soul_md || null,
         body.user_md || null,
         body.agents_md || null,
+        body.openclaw_agent_name || 'main',
         now,
         now,
       ]
