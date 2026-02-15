@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Orchestration Observability Dashboard** - New `/ops` route with comprehensive metrics visualization
+  - Global metrics endpoint (`/api/ops/overview`) showing success rate, retry rate, avg attempts, and degraded agents
+  - Agent health endpoint (`/api/ops/agents`) with success rates, last 20 performance, and degradation status
+  - Task outcomes endpoint (`/api/ops/tasks`) displaying recent task attempts with retry indicators
+  - Retry distribution endpoint (`/api/ops/retries`) for attempt pattern analysis
+  - Real-time dashboard UI with color-coded health indicators
+  - Agent health table with performance metrics and status badges
+  - Recent task outcomes table with retry visibility
+- **Ops Navigation Links** - Added "Ops" button to Header and WorkspaceDashboard for easy access to observability metrics
 - **Device Identity Authentication** - Mission Control now connects to OpenClaw with ed25519 device identity, granting `operator.admin` scope for full gateway control (create, update, delete agents)
 - **Push Agent to OpenClaw** - New `POST /api/agents/[id]/push` endpoint creates agent on gateway via `agents.create` and uploads SOUL.md via `agents.files.set`. "↑ Push to OpenClaw" button in AgentModal
 - **Pull Agents from OpenClaw** - New `GET /api/agents/sync` endpoint syncs agents from gateway sessions into Mission Control with `auto_discovered` flag. "↻ Sync" button in AgentsSidebar
@@ -32,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Sync Response Parsing** - Fixed `sessions.list` response to use `result?.sessions` and `session.key` (not `session.sessionKey`)
+- **TypeScript Errors** - Added type assertions for OpenClaw API responses
+- **Linting Issues** - Fixed prefer-const violations in planning route
 
 ---
 
