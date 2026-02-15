@@ -163,7 +163,7 @@ export async function DELETE(
     if (existing.openclaw_agent_name) {
       try {
         const client = await getOpenClawClient();
-        const listRes = await client.call('agents.list', {});
+        const listRes = await client.call('agents.list', {}) as { agents?: Array<{ id: string }> };
         const ocAgents = listRes?.agents || [];
         const found = ocAgents.find((a: { id: string }) => a.id === existing.openclaw_agent_name);
         if (found) {
