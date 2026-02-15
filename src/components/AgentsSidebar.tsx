@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, ChevronRight, Zap, ZapOff, Loader2 } from 'lucide-react';
+import { Plus, ChevronRight, Zap, ZapOff, Loader2, RefreshCw } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
+import { useAgentSync } from '@/hooks/useAgentSync';
 import type { Agent, AgentStatus, OpenClawSession } from '@/lib/types';
 import { AgentModal } from './AgentModal';
 
@@ -13,12 +14,22 @@ interface AgentsSidebarProps {
 }
 
 export function AgentsSidebar({ workspaceId }: AgentsSidebarProps) {
-  const { agents, selectedAgent, setSelectedAgent, agentOpenClawSessions, setAgentOpenClawSession } = useMissionControl();
+  const { agents, selectedAgent, setSelectedAgent, agentOpenClawSessions, setAgentOpenClawSession, fetchAgents } = useMissionControl();
+  const { syncAgents, isSyncing } = useAgentSync();
   const [filter, setFilter] = useState<FilterTab>('all');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [connectingAgentId, setConnectingAgentId] = useState<string | null>(null);
   const [activeSubAgents, setActiveSubAgents] = useState(0);
+
+  const handleSync = async () => {
+    try {
+      await syncAgents();
+      await fetchAgents();
+    } catch (error) {
+      console.error('Sync failed:', error);
+    }
+  };
 
   // Load OpenClaw session status for all agents on mount
   useEffect(() => {
@@ -135,20 +146,31 @@ export function AgentsSidebar({ workspaceId }: AgentsSidebarProps) {
         )}
 
         {/* Filter Tabs */}
-        <div className="flex gap-1">
-          {(['all', 'working', 'standby'] as FilterTab[]).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setFilter(tab)}
-              className={`px-3 py-1 text-xs rounded uppercase ${
-                filter === tab
-                  ? 'bg-mc-accent text-mc-bg font-medium'
-                  : 'text-mc-text-secondary hover:bg-mc-bg-tertiary'
-              }`}
-            >
-              {tab}
-            </button>
-          ))}
+        <div className="flex gap-1 items-center">
+          <button
+            onClick={handleSync}
+            disabled={isSyncing}
+            className="p-1.5 rounded hover:bg-mc-bg-tertiary text-mc-text-secondary hover:text-mc-accent disabled:opacity-50"
+            title="Sync agents from OpenClaw"
+          >
+            <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+          </button>
+          
+          <div className="flex gap-1 flex-1">
+            {(['all', 'working', 'standby'] as FilterTab[]).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setFilter(tab)}
+                className={`px-3 py-1 text-xs rounded uppercase ${
+                  filter === tab
+                    ? 'bg-mc-accent text-mc-bg font-medium'
+                    : 'text-mc-text-secondary hover:bg-mc-bg-tertiary'
+                }`}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -186,6 +208,11 @@ export function AgentsSidebar({ workspaceId }: AgentsSidebarProps) {
                     <span className="font-medium text-sm truncate">{agent.name}</span>
                     {!!agent.is_master && (
                       <span className="text-xs text-mc-accent-yellow">★</span>
+                    )}
+                    {!!agent.auto_discovered && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 uppercase">
+                        Auto
+                      </span>
                     )}
                   </div>
                   <div className="text-xs text-mc-text-secondary truncate">

@@ -16,10 +16,13 @@ const EMOJI_OPTIONS = ['🤖', '🦞', '💻', '🔍', '✍️', '🎨', '📊',
 
 export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: AgentModalProps) {
   const { addAgent, updateAgent, agents } = useMissionControl();
-  const [activeTab, setActiveTab] = useState<'info' | 'soul' | 'user' | 'agents'>('info');
+  const [activeTab, setActiveTab] = useState<'info' | 'soul' | 'user' | 'agents' | 'workspaces'>('info');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [runtimeAgents, setRuntimeAgents] = useState<Array<{ id: string; display_name?: string }>>([]);
   const [loadingRuntime, setLoadingRuntime] = useState(false);
+  const [workspaces, setWorkspaces] = useState<Array<{ id: string; name: string; assigned: boolean }>>([]);
+  const [loadingWorkspaces, setLoadingWorkspaces] = useState(false);
+  const [isPushing, setIsPushing] = useState(false);
 
   const [form, setForm] = useState({
     name: agent?.name || '',
@@ -54,6 +57,72 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
     loadAgents();
   }, []);
 
+  useEffect(() => {
+    const loadWorkspaces = async () => {
+      try {
+        setLoadingWorkspaces(true);
+        const allRes = await fetch('/api/workspaces');
+        const allWorkspaces = await allRes.json();
+        
+        if (agent) {
+          // Editing existing agent - load assignments
+          const assignedRes = await fetch(`/api/agents/${agent.id}/workspaces`);
+          const assignedWorkspaces = await assignedRes.json();
+          const assignedIds = new Set(assignedWorkspaces.map((w: any) => w.id));
+          
+          setWorkspaces(allWorkspaces.map((w: any) => ({
+            ...w,
+            assigned: assignedIds.has(w.id)
+          })));
+        } else {
+          // Creating new agent - all unassigned
+          setWorkspaces(allWorkspaces.map((w: any) => ({
+            ...w,
+            assigned: false
+          })));
+        }
+      } catch (err) {
+        console.error('Failed to load workspaces:', err);
+      } finally {
+        setLoadingWorkspaces(false);
+      }
+    };
+
+    if (activeTab === 'workspaces') {
+      loadWorkspaces();
+    }
+  }, [agent, activeTab]);
+
+  const toggleWorkspace = async (workspaceId: string) => {
+    if (!agent) {
+      // For new agents, just toggle locally
+      setWorkspaces(workspaces.map(w => 
+        w.id === workspaceId ? { ...w, assigned: !w.assigned } : w
+      ));
+      return;
+    }
+    
+    const workspace = workspaces.find(w => w.id === workspaceId);
+    if (!workspace) return;
+    
+    try {
+      await fetch(`/api/agents/${agent.id}/workspaces`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          action: workspace.assigned ? 'unassign' : 'assign'
+        })
+      });
+      
+      setWorkspaces(workspaces.map(w => 
+        w.id === workspaceId ? { ...w, assigned: !w.assigned } : w
+      ));
+    } catch (err) {
+      console.error('Failed to toggle workspace:', err);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -73,6 +142,19 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
 
       if (res.ok) {
         const savedAgent = await res.json();
+        
+        // Assign workspaces for new agents
+        if (!agent) {
+          const assignedWorkspaceIds = workspaces.filter(w => w.assigned).map(w => w.id);
+          for (const wsId of assignedWorkspaceIds) {
+            await fetch(`/api/agents/${savedAgent.id}/workspaces`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ workspaceId: wsId, action: 'assign' })
+            });
+          }
+        }
+        
         if (agent) {
           updateAgent(savedAgent);
         } else {
@@ -109,11 +191,33 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
     }
   };
 
+  const handlePushToOpenClaw = async () => {
+    if (!agent) return;
+    
+    try {
+      setIsPushing(true);
+      const res = await fetch(`/api/agents/${agent.id}/push`, { method: 'POST' });
+      const data = await res.json();
+      
+      if (res.ok) {
+        alert(`✓ ${data.message}`);
+      } else {
+        alert(`✗ Failed: ${data.error}`);
+      }
+    } catch (error) {
+      console.error('Failed to push to OpenClaw:', error);
+      alert('✗ Failed to push agent to OpenClaw');
+    } finally {
+      setIsPushing(false);
+    }
+  };
+
   const tabs = [
     { id: 'info', label: 'Info' },
     { id: 'soul', label: 'SOUL.md' },
     { id: 'user', label: 'USER.md' },
     { id: 'agents', label: 'AGENTS.md' },
+    { id: 'workspaces', label: 'Workspaces' },
   ] as const;
 
   return (
@@ -218,26 +322,24 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
                   OpenClaw Runtime Agent
                 </label>
 
-                <select
-                  value={form.openclaw_agent_name || 'main'}
+                <input
+                  type="text"
+                  value={form.openclaw_agent_name || ''}
                   onChange={(e) =>
                     setForm({ ...form, openclaw_agent_name: e.target.value })
                   }
-                  className="w-full border rounded p-2 bg-background"
-                >
-                  <option value="main">main</option>
+                  placeholder="Enter agent name (e.g., main, custom-agent)"
+                  className="w-full bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent"
+                />
 
-                  {runtimeAgents.map((agentOption) => (
-                    <option key={agentOption.id} value={agentOption.id}>
-                      {(agentOption.display_name || agentOption.id)} ({agentOption.id})
-                    </option>
-                  ))}
-                </select>
-
-                {loadingRuntime && (
-                  <p className="text-xs text-muted mt-1">
+                {loadingRuntime ? (
+                  <p className="text-xs text-mc-text-secondary mt-1">
                     Loading runtime agents...
                   </p>
+                ) : runtimeAgents.length > 0 && (
+                  <div className="mt-1 text-xs text-mc-text-secondary">
+                    Existing: {runtimeAgents.map(a => a.id).join(', ')}
+                  </div>
                 )}
               </div>
 
@@ -315,20 +417,67 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
               />
             </div>
           )}
+
+          {activeTab === 'workspaces' && (
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Workspace Assignments
+              </label>
+              {loadingWorkspaces ? (
+                <div className="text-center py-8 text-mc-text-secondary">Loading...</div>
+              ) : (
+                <div className="space-y-2">
+                  {workspaces.map((workspace) => (
+                    <div
+                      key={workspace.id}
+                      className="flex items-center justify-between p-3 bg-mc-bg border border-mc-border rounded hover:border-mc-accent transition-colors"
+                    >
+                      <span className="text-sm">{workspace.name}</span>
+                      <button
+                        onClick={() => toggleWorkspace(workspace.id)}
+                        className={`px-3 py-1 text-xs rounded ${
+                          workspace.assigned
+                            ? 'bg-mc-accent text-mc-bg'
+                            : 'bg-mc-bg-tertiary text-mc-text-secondary'
+                        }`}
+                      >
+                        {workspace.assigned ? 'Assigned' : 'Assign'}
+                      </button>
+                    </div>
+                  ))}
+                  {workspaces.length === 0 && (
+                    <div className="text-center py-8 text-mc-text-secondary">
+                      No workspaces available
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </form>
 
         {/* Footer */}
         <div className="flex items-center justify-between p-4 border-t border-mc-border">
-          <div>
+          <div className="flex gap-2">
             {agent && (
-              <button
-                type="button"
-                onClick={handleDelete}
-                className="flex items-center gap-2 px-3 py-2 text-mc-accent-red hover:bg-mc-accent-red/10 rounded text-sm"
-              >
-                <Trash2 className="w-4 h-4" />
-                Delete
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={handlePushToOpenClaw}
+                  disabled={isPushing}
+                  className="flex items-center gap-2 px-3 py-2 bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 rounded text-sm disabled:opacity-50"
+                >
+                  {isPushing ? 'Pushing...' : '↑ Push to OpenClaw'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  className="flex items-center gap-2 px-3 py-2 text-mc-accent-red hover:bg-mc-accent-red/10 rounded text-sm"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete
+                </button>
+              </>
             )}
           </div>
           <div className="flex gap-2">

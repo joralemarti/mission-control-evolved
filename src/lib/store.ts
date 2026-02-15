@@ -26,6 +26,7 @@ interface MissionControlState {
 
   // Actions
   setAgents: (agents: Agent[]) => void;
+  fetchAgents: () => Promise<void>;
   setTasks: (tasks: Task[]) => void;
   setConversations: (conversations: Conversation[]) => void;
   setEvents: (events: Event[]) => void;
@@ -72,6 +73,17 @@ export const useMissionControl = create<MissionControlState>((set) => ({
 
   // Setters
   setAgents: (agents) => set({ agents }),
+  fetchAgents: async () => {
+    try {
+      const res = await fetch('/api/agents');
+      if (res.ok) {
+        const agents = await res.json();
+        set({ agents });
+      }
+    } catch (error) {
+      console.error('Failed to fetch agents:', error);
+    }
+  },
   setTasks: (tasks) => {
     debug.store('setTasks called', { count: tasks.length });
     set({ tasks });
