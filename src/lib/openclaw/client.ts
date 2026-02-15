@@ -1,10 +1,29 @@
 // OpenClaw Gateway WebSocket Client
 
 import { EventEmitter } from 'events';
+import * as crypto from 'crypto';
 import type { OpenClawMessage, OpenClawSessionInfo } from '../types';
 
 const GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || 'ws://127.0.0.1:18789';
 const GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || '';
+
+function base64UrlEncode(buf: Buffer): string {
+  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function generateDeviceIdentity() {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const spkiDer = publicKey.export({ type: 'spki', format: 'der' });
+  const raw = spkiDer.subarray(spkiDer.length - 32);
+  const deviceId = crypto.createHash('sha256').update(raw).digest('hex');
+  const publicKeyBase64 = base64UrlEncode(raw);
+  return { deviceId, publicKeyPem, privateKeyPem, publicKeyBase64, privateKey };
+}
+
+// Generate once per process
+const deviceIdentity = generateDeviceIdentity();
 
 export class OpenClawClient extends EventEmitter {
   private ws: WebSocket | null = null;
@@ -107,6 +126,12 @@ export class OpenClawClient extends EventEmitter {
             if (data.type === 'event' && data.event === 'connect.challenge') {
               console.log('[OpenClaw] Challenge received, responding...');
               const requestId = crypto.randomUUID();
+              
+              const signedAtMs = Date.now();
+              const scopes = ['operator.admin'];
+              const payload = ['v1', deviceIdentity.deviceId, 'gateway-client', 'ui', 'operator', scopes.join(','), String(signedAtMs), this.token].join('|');
+              const signature = base64UrlEncode(crypto.sign(null, Buffer.from(payload, 'utf8'), deviceIdentity.privateKey));
+              
               const response = {
                 type: 'req',
                 id: requestId,
@@ -120,8 +145,15 @@ export class OpenClawClient extends EventEmitter {
                     platform: 'web',
                     mode: 'ui'
                   },
+                  scopes,
                   auth: {
                     token: this.token
+                  },
+                  device: {
+                    id: deviceIdentity.deviceId,
+                    publicKey: deviceIdentity.publicKeyBase64,
+                    signature,
+                    signedAt: signedAtMs
                   }
                 }
               };
