@@ -44,5 +44,8 @@ next-env.d.ts
 .claude/settings.local.json
 .claude/tsc-cache/
 
+# kiro cli local files
+.kiro/
+
 # local development notes/handoffs (may contain sensitive context)
 /thoughts/
