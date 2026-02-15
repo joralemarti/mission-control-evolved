@@ -197,7 +197,19 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const taskProjectDir = `${projectsPath}/${projectDir}`;
     const missionControlUrl = getMissionControlUrl();
 
-    const taskMessage = `${priorityEmoji} **NEW TASK ASSIGNED**
+    // Build agent context from configuration files
+    let agentContext = '';
+    if (selectedAgent.soul_md) {
+      agentContext += `--- AGENT SOUL ---\n${selectedAgent.soul_md}\n\n`;
+    }
+    if (selectedAgent.user_md) {
+      agentContext += `--- USER CONTEXT ---\n${selectedAgent.user_md}\n\n`;
+    }
+    if (selectedAgent.agents_md) {
+      agentContext += `--- AGENTS DIRECTORY ---\n${selectedAgent.agents_md}\n\n`;
+    }
+
+    const taskMessage = `${agentContext}${priorityEmoji} **NEW TASK ASSIGNED**
 
 **Title:** ${task.title}
 ${task.description ? `**Description:** ${task.description}\n` : ''}
