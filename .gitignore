@@ -49,3 +49,9 @@ next-env.d.ts
 
 # local development notes/handoffs (may contain sensitive context)
 /thoughts/
+
+# test files
+test-sync.js
+
+# binaries
+mission-control
