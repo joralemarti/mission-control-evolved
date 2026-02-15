@@ -33,6 +33,8 @@ export interface Agent {
   user_md?: string;
   agents_md?: string;
   openclaw_agent_name?: string;
+  auto_discovered?: boolean;
+  last_seen_at?: string;
   created_at: string;
   updated_at: string;
 }

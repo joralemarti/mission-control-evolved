@@ -237,6 +237,54 @@ const migrations: Migration[] = [
         WHERE openclaw_agent_name IN ('Bender', 'Charlie', 'Forge');
       `);
     }
+  },
+  {
+    id: '009',
+    name: 'add_agent_auto_discovery_fields',
+    up: (db) => {
+      console.log('[Migration 009] Adding auto-discovery fields to agents...');
+
+      const agentsInfo = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
+      
+      if (!agentsInfo.some(col => col.name === 'auto_discovered')) {
+        db.exec(`ALTER TABLE agents ADD COLUMN auto_discovered INTEGER DEFAULT 0`);
+        console.log('[Migration 009] Added auto_discovered');
+      }
+      
+      if (!agentsInfo.some(col => col.name === 'last_seen_at')) {
+        db.exec(`ALTER TABLE agents ADD COLUMN last_seen_at TEXT`);
+        console.log('[Migration 009] Added last_seen_at');
+      }
+      
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agents_openclaw_name ON agents(openclaw_agent_name)`);
+      console.log('[Migration 009] Added index on openclaw_agent_name');
+    }
+  },
+  {
+    id: '010',
+    name: 'add_agent_workspace_relation',
+    up: (db) => {
+      console.log('[Migration 010] Creating agent-workspace many-to-many relation...');
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_workspaces (
+          agent_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          created_at TEXT DEFAULT (datetime('now')),
+          PRIMARY KEY (agent_id, workspace_id),
+          FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+          FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+        )
+      `);
+
+      // Migrate existing agent workspace assignments
+      db.exec(`
+        INSERT OR IGNORE INTO agent_workspaces (agent_id, workspace_id)
+        SELECT id, workspace_id FROM agents WHERE workspace_id IS NOT NULL
+      `);
+
+      console.log('[Migration 010] Created agent_workspaces table and migrated data');
+    }
   }
 ];
 
