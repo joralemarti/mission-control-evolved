@@ -68,15 +68,7 @@ export async function PATCH(
       return NextResponse.json({ error: openclawAgentNameError }, { status: 400 });
     }
 
-    if (body.openclaw_agent_name) {
-      const validIds = await fetchRuntimeAgentIds();
-      if (!validIds.includes(body.openclaw_agent_name)) {
-        return NextResponse.json(
-          { error: 'Invalid OpenClaw runtime agent' },
-          { status: 400 }
-        );
-      }
-    }
+    // Allow any openclaw_agent_name - validation removed to support creating new agents
 
     if (body.name !== undefined) {
       updates.push('name = ?');
@@ -166,6 +158,22 @@ export async function DELETE(
     run('UPDATE tasks SET assigned_agent_id = NULL WHERE assigned_agent_id = ?', [id]);
     run('UPDATE tasks SET created_by_agent_id = NULL WHERE created_by_agent_id = ?', [id]);
     run('UPDATE task_activities SET agent_id = NULL WHERE agent_id = ?', [id]);
+
+    // Delete from OpenClaw if agent has an openclaw name
+    if (existing.openclaw_agent_name) {
+      try {
+        const client = await getOpenClawClient();
+        const listRes = await client.call('agents.list', {});
+        const ocAgents = listRes?.agents || [];
+        const found = ocAgents.find((a: { id: string }) => a.id === existing.openclaw_agent_name);
+        if (found) {
+          await client.call('agents.delete', { agentId: existing.openclaw_agent_name });
+          console.log(`[DELETE] Removed agent "${existing.openclaw_agent_name}" from OpenClaw`);
+        }
+      } catch (err) {
+        console.warn('[DELETE] Failed to remove from OpenClaw:', err);
+      }
+    }
 
     // Now delete the agent
     run('DELETE FROM agents WHERE id = ?', [id]);

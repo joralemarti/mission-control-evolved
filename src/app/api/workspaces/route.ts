@@ -46,10 +46,13 @@ export async function GET(request: NextRequest) {
           counts.total += tc.count;
         });
         
-        // Get agent count
-        const agentCount = db.prepare(
-          'SELECT COUNT(*) as count FROM agents WHERE workspace_id = ?'
-        ).get(workspace.id) as { count: number };
+        // Get agent count (using agent_workspaces relation)
+        const agentCount = db.prepare(`
+          SELECT COUNT(DISTINCT a.id) as count 
+          FROM agents a
+          LEFT JOIN agent_workspaces aw ON a.id = aw.agent_id
+          WHERE aw.workspace_id = ? OR a.workspace_id = ?
+        `).get(workspace.id, workspace.id) as { count: number };
         
         return {
           id: workspace.id,

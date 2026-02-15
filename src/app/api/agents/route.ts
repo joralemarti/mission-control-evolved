@@ -34,8 +34,11 @@ export async function GET(request: NextRequest) {
     let agents: Agent[];
     if (workspaceId) {
       agents = queryAll<Agent>(`
-        SELECT * FROM agents WHERE workspace_id = ? ORDER BY is_master DESC, name ASC
-      `, [workspaceId]);
+        SELECT DISTINCT a.* FROM agents a
+        LEFT JOIN agent_workspaces aw ON a.id = aw.agent_id
+        WHERE aw.workspace_id = ? OR a.workspace_id = ?
+        ORDER BY a.is_master DESC, a.name ASC
+      `, [workspaceId, workspaceId]);
     } else {
       agents = queryAll<Agent>(`
         SELECT * FROM agents ORDER BY is_master DESC, name ASC
@@ -62,15 +65,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: openclawAgentNameError }, { status: 400 });
     }
 
-    if (body.openclaw_agent_name) {
-      const validIds = await fetchRuntimeAgentIds();
-      if (!validIds.includes(body.openclaw_agent_name)) {
-        return NextResponse.json(
-          { error: 'Invalid OpenClaw runtime agent' },
-          { status: 400 }
-        );
-      }
-    }
+    // Allow any openclaw_agent_name - validation removed to support creating new agents
 
     const id = uuidv4();
     const now = new Date().toISOString();
