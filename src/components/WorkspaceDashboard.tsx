@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, ArrowRight, Folder, Users, CheckSquare, Trash2, AlertTriangle } from 'lucide-react';
+import { Plus, ArrowRight, Folder, Users, CheckSquare, Trash2, AlertTriangle, Activity } from 'lucide-react';
 import Link from 'next/link';
 import type { WorkspaceStats } from '@/lib/types';
 
@@ -49,13 +49,22 @@ export function WorkspaceDashboard() {
               <span className="text-2xl">🦞</span>
               <h1 className="text-xl font-bold">Mission Control</h1>
             </div>
-            <button
-              onClick={() => setShowCreateModal(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-mc-accent text-mc-bg rounded-lg font-medium hover:bg-mc-accent/90"
-            >
-              <Plus className="w-4 h-4" />
-              New Workspace
-            </button>
+            <div className="flex items-center gap-3">
+              <Link
+                href="/ops"
+                className="flex items-center gap-2 px-4 py-2 bg-mc-surface border border-mc-border text-mc-text rounded-lg font-medium hover:bg-mc-bg-tertiary"
+              >
+                <Activity className="w-4 h-4" />
+                Ops
+              </Link>
+              <button
+                onClick={() => setShowCreateModal(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-mc-accent text-mc-bg rounded-lg font-medium hover:bg-mc-accent/90"
+              >
+                <Plus className="w-4 h-4" />
+                New Workspace
+              </button>
+            </div>
           </div>
         </div>
       </header>
